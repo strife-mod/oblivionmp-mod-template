@@ -9,22 +9,22 @@
 # The server hands the client folder to connecting players and keeps the server folder to itself.
 
 # Folder name of the packaged mod. Conventionally the uniqueId from manifest.json.
-$modName = "ExampleMod"
+$modName = "DayInfo"
 
 # The projects the two halves build from.
-$clientProject = "ExampleMod.Client"
-$serverProject = "ExampleMod.Server"
+$clientProject = "DayInfo.Client"
+$serverProject = "DayInfo.Server"
 
 # --- Client half, from <clientProject>/bin/<Configuration>/net10.0 ---
 $clientBuildFiles = @(
-    "ExampleMod.Client.dll",
-    "ExampleMod.Common.dll"   # shared assembly both halves need
+    "DayInfo.Client.dll",
+    "DayInfo.Common.dll"   # shared assembly both halves need
 )
 
 # --- Server half, from <serverProject>/bin/<Configuration>/net10.0 ---
 $serverBuildFiles = @(
-    "ExampleMod.Server.dll",
-    "ExampleMod.Common.dll"
+    "DayInfo.Server.dll",
+    "DayInfo.Common.dll"
 )
 
 # Copied from "Content" into the mod root, alongside the two halves.
@@ -34,7 +34,8 @@ $manifestFiles = @(
 
 # Copied from "Content" into client/ and server/. Add any non-code files your mod ships.
 $clientContentFiles = @(
-    # "icon.png"
+    "ui",    # the web pages, served to CEF by Mod.cs
+    "data"   # place names, built by Tools/ExtractLocations.cs
 )
 
 $serverContentFiles = @(
@@ -43,11 +44,11 @@ $serverContentFiles = @(
 
 # Added only in Debug builds.
 $clientDebugBuildFiles = @(
-    "ExampleMod.Client.pdb",
-    "ExampleMod.Common.pdb"
+    "DayInfo.Client.pdb",
+    "DayInfo.Common.pdb"
 )
 
 $serverDebugBuildFiles = @(
-    "ExampleMod.Server.pdb",
-    "ExampleMod.Common.pdb"
+    "DayInfo.Server.pdb",
+    "DayInfo.Common.pdb"
 )

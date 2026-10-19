@@ -1,0 +1,305 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>World HUD</title>
+<!--
+  Served over readym:// and shown by WorldHud.cs in a 400x124 viewport in the top-right corner.
+  The mod sends WorldState(hour, minute, location, date, weatherIcon) whenever the in-game minute,
+  the place, the day or the weather changes; readym.sendReady() asks it for the
+  current state once the page is listening.
+
+  The look follows the game's menus: ink on a sheet of parchment, and a weather tile cut like the
+  birthsign plates. The icons are drawn below as SVG, one function per weatherIcon value.
+
+  Opened in a normal browser there is no readym object, so the page shows a sample instead; click
+  the tile to step through every icon, by day and by night.
+-->
+<style>
+  /* The game's own UI font, as OblivionMP's player list, ping and version widgets use it. */
+  @font-face {
+    font-family: "Kingthings Petrock";
+    src: url("fonts/Kingthings%20Petrock.ttf") format("truetype");
+  }
+  @font-face {
+    font-family: "Kingthings Petrock Light";
+    src: url("fonts/Kingthings%20Petrock%20light.ttf") format("truetype");
+  }
+
+  :root {
+    --ink: #3b2b20;
+    --ink-soft: #5b4636;
+    --ink-faint: #8a7058;
+    --parchment: #e7ddc7;
+    --rule: rgba(91, 70, 54, 0.35);
+  }
+
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  body { font-family: "Kingthings Petrock", "Palatino Linotype", Georgia, serif;
+         color: var(--ink); user-select: none; }
+
+  #card {
+    position: absolute; inset: 6px; isolation: isolate;
+    display: flex; align-items: center; gap: 16px;
+    padding: 0 22px 0 16px;
+  }
+
+  /* The sheet sits on its own layer so that bending its edges leaves the text alone. A slow, gentle
+     displacement gives the outline the give of real paper without tearing it, and the inset shadow
+     browns the edges the way old parchment ages. */
+  #paper {
+    position: absolute; inset: 0; z-index: -1;
+    border-radius: 3px;
+    filter: url(#paper-edge) drop-shadow(0 3px 5px rgba(0, 0, 0, 0.5));
+    box-shadow: inset 0 0 14px rgba(120, 84, 46, 0.38), inset 0 0 2px rgba(90, 62, 34, 0.5);
+    background-color: var(--parchment);
+    background-image:
+      radial-gradient(ellipse at 50% 45%, rgba(255, 250, 235, 0.55), rgba(255, 250, 235, 0) 65%),
+      radial-gradient(ellipse at 50% 50%, rgba(0, 0, 0, 0) 55%, rgba(110, 78, 45, 0.28) 100%),
+      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.35  0 0 0 0 0.25  0 0 0 0 0.15  0 0 0 0.16 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  }
+
+  #tile { flex: none; width: 92px; height: 92px; cursor: default; }
+  #tile svg { display: block; width: 100%; height: 100%; }
+
+  #text { flex: 1; min-width: 0; }
+  #time { font-size: 38px; line-height: 1; white-space: nowrap; }
+  #time small { font-size: 18px; margin-left: 5px; color: var(--ink-soft); letter-spacing: 1px; }
+  #rule { height: 1px; margin: 6px 0 5px;
+          background: linear-gradient(90deg, var(--rule), var(--rule) 70%, rgba(91, 70, 54, 0)); }
+  #location, #date { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #location { font-size: 18px; line-height: 1.2; color: var(--ink); }
+  #date { font-family: "Kingthings Petrock Light", "Kingthings Petrock", serif;
+          font-size: 16px; line-height: 1.25; color: var(--ink-soft); }
+</style>
+<svg width="0" height="0" style="position: absolute">
+  <filter id="paper-edge" x="-5%" y="-15%" width="110%" height="130%" color-interpolation-filters="sRGB">
+    <feTurbulence type="fractalNoise" baseFrequency="0.012 0.035" numOctaves="1" seed="11"/>
+    <feDisplacementMap in="SourceGraphic" scale="4" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+</svg>
+<div id="card">
+  <div id="paper"></div>
+  <div id="tile"></div>
+  <div id="text">
+    <div id="time">--:--</div>
+    <div id="rule"></div>
+    <div id="location">&nbsp;</div>
+    <div id="date">&nbsp;</div>
+  </div>
+</div>
+<script>
+(function () {
+  'use strict';
+
+  // ---------------------------------------------------------------------------------------------
+  // Weather tiles. A 100x100 plate: cream frame, a dotted braid, two rules, then the scene cut in
+  // cream out of a dark field, the way the birthsign plates are.
+
+  const CREAM = '#ede4d3';
+  const FIELD = '#5d3c36';
+  const FIELD_OBLIVION = '#5e241b';
+  const GLOW = '#d97a45';
+
+  function plate(scene, field) {
+    return '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">' +
+      // Mottling, so the field reads as ink pressed into paper rather than flat colour.
+      '<filter id="mottle" x="0" y="0" width="100%" height="100%">' +
+      '<feTurbulence type="fractalNoise" baseFrequency="0.09" numOctaves="2" seed="3"/>' +
+      '<feColorMatrix values="0 0 0 0 0.93  0 0 0 0 0.89  0 0 0 0 0.83  0 0 0 0.9 -0.42"/>' +
+      '<feComposite in2="SourceGraphic" operator="in"/></filter>' +
+      '<rect x="2" y="2" width="96" height="96" fill="' + field + '" stroke="' + CREAM + '" stroke-width="2.5"/>' +
+      '<rect x="14" y="14" width="72" height="72" fill="' + field + '" filter="url(#mottle)" opacity="0.5"/>' +
+      '<rect x="6.5" y="6.5" width="87" height="87" fill="none" stroke="' + CREAM + '" stroke-width="3" stroke-dasharray="1.4 1.6"/>' +
+      '<rect x="10.8" y="10.8" width="78.4" height="78.4" fill="none" stroke="' + CREAM + '" stroke-width="1.3"/>' +
+      '<rect x="13.4" y="13.4" width="73.2" height="73.2" fill="none" stroke="' + CREAM + '" stroke-width="0.7"/>' +
+      '<svg x="14" y="14" width="72" height="72" viewBox="14 14 72 72" overflow="hidden">' + scene(field) + '</svg>' +
+      '</svg>';
+  }
+
+  // The sun: a disc ringed with long and short rays.
+  function sun(cx, cy, r, field) {
+    let s = '';
+    for (let i = 0; i < 16; i++) {
+      const a = i * Math.PI / 8;
+      const tip = r * (i % 2 ? 1.75 : 2.25);
+      const half = Math.PI / 30;
+      const p = (rad, ang) => (cx + rad * Math.cos(ang)).toFixed(1) + ',' + (cy + rad * Math.sin(ang)).toFixed(1);
+      s += '<polygon points="' + p(r * 1.2, a - half) + ' ' + p(tip, a) + ' ' + p(r * 1.2, a + half) + '" fill="' + CREAM + '"/>';
+    }
+    s += '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="' + CREAM + '"/>';
+    s += '<circle cx="' + cx + '" cy="' + cy + '" r="' + (r * 0.68).toFixed(1) + '" fill="none" stroke="' + field + '" stroke-width="1.2"/>';
+    return s;
+  }
+
+  // Masser as a crescent, Secunda small beside it.
+  function moons(cx, cy, r, field) {
+    return '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="' + CREAM + '"/>' +
+      '<circle cx="' + (cx + r * 0.45) + '" cy="' + (cy - r * 0.35) + '" r="' + (r * 0.85) + '" fill="' + field + '"/>' +
+      '<circle cx="' + (cx + r * 1.35) + '" cy="' + (cy - r * 0.9) + '" r="' + (r * 0.32) + '" fill="' + CREAM + '"/>';
+  }
+
+  function star(x, y, r) {
+    return '<path d="M' + x + ' ' + (y - r) + ' L' + (x + r * 0.28) + ' ' + (y - r * 0.28) + ' L' + (x + r) + ' ' + y +
+      ' L' + (x + r * 0.28) + ' ' + (y + r * 0.28) + ' L' + x + ' ' + (y + r) + ' L' + (x - r * 0.28) + ' ' + (y + r * 0.28) +
+      ' L' + (x - r) + ' ' + y + ' L' + (x - r * 0.28) + ' ' + (y - r * 0.28) + ' Z" fill="' + CREAM + '"/>';
+  }
+
+  // A billowing cloud: a halo in the field colour to cut it free of what is behind, the cream
+  // body, then engraved lines and a curl.
+  function cloud(x, y, k, field, hollow) {
+    const puffs = [[-15, 2, 9], [-5, -7, 12], [9, -4, 11], [18, 3, 8]];
+    const base = [x - 22 * k, y + 1 * k, 42 * k, 10 * k];
+    let halo = '', body = '';
+    for (const [dx, dy, r] of puffs) {
+      halo += '<circle cx="' + (x + dx * k) + '" cy="' + (y + dy * k) + '" r="' + (r * k + 2.4) + '" fill="' + field + '"/>';
+      body += '<circle cx="' + (x + dx * k) + '" cy="' + (y + dy * k) + '" r="' + (r * k) + '"/>';
+    }
+    halo += '<rect x="' + (base[0] - 2.4) + '" y="' + (base[1] - 2.4) + '" width="' + (base[2] + 4.8) + '" height="' + (base[3] + 4.8) + '" rx="' + (5 * k + 2.4) + '" fill="' + field + '"/>';
+    body += '<rect x="' + base[0] + '" y="' + base[1] + '" width="' + base[2] + '" height="' + base[3] + '" rx="' + (5 * k) + '"/>';
+
+    const fill = hollow ? field : CREAM;
+    const line = hollow ? CREAM : field;
+    let s = halo + '<g fill="' + fill + '"' + (hollow ? ' stroke="' + CREAM + '" stroke-width="1.6"' : '') + '>' + body + '</g>';
+    if (hollow) {
+      // Paint the bodies again without strokes, so the inner seams between puffs disappear.
+      s += '<g fill="' + field + '">' + body.replace(/r="([\d.]+)"/g, (m, r) => 'r="' + Math.max(0, r - 0.8) + '"') + '</g>';
+    }
+    // Engraving: a highlight cut inside the upper left of each puff, and ruled shading underneath,
+    // the way a woodcut models a curve.
+    for (const [dx, dy, r] of puffs.slice(0, 3)) {
+      const cx = x + dx * k, cy = y + dy * k, rr = r * k * 0.7;
+      const at = deg => [(cx + rr * Math.cos(deg * Math.PI / 180)).toFixed(1), (cy + rr * Math.sin(deg * Math.PI / 180)).toFixed(1)];
+      const [x1, y1] = at(195), [x2, y2] = at(255);
+      s += '<path d="M' + x1 + ' ' + y1 + ' A' + rr + ' ' + rr + ' 0 0 1 ' + x2 + ' ' + y2 + '" fill="none" stroke="' + line + '" stroke-width="1.1" stroke-linecap="round"/>';
+    }
+    for (let i = 0; i < 3; i++) {
+      const yy = y + (5.5 + i * 2.2) * k, inset = (4 + i * 3) * k;
+      s += '<line x1="' + (x - 20 * k + inset) + '" y1="' + yy + '" x2="' + (x + 19 * k - inset) + '" y2="' + yy + '" stroke="' + line + '" stroke-width="0.9" stroke-linecap="round"/>';
+    }
+    return s;
+  }
+
+  function streaks(xs, y1, y2, slant) {
+    return xs.map(x => '<line x1="' + x + '" y1="' + y1 + '" x2="' + (x - slant) + '" y2="' + y2 + '" stroke="' + CREAM + '" stroke-width="2.2" stroke-linecap="round"/>').join('');
+  }
+
+  function flake(x, y, r) {
+    let s = '';
+    for (let i = 0; i < 3; i++) {
+      const a = i * Math.PI / 3, dx = r * Math.cos(a), dy = r * Math.sin(a);
+      s += '<line x1="' + (x - dx) + '" y1="' + (y - dy) + '" x2="' + (x + dx) + '" y2="' + (y + dy) + '" stroke="' + CREAM + '" stroke-width="1.6" stroke-linecap="round"/>';
+    }
+    return s + '<circle cx="' + x + '" cy="' + y + '" r="1.3" fill="' + CREAM + '"/>';
+  }
+
+  // Ruled ground under a scene, like the water and earth lines on the plates.
+  function ground(y) {
+    let s = '';
+    for (let i = 0; i < 4; i++) {
+      const yy = y + i * 3, inset = i * 2;
+      s += '<line x1="' + (16 + inset) + '" y1="' + yy + '" x2="' + (84 - inset) + '" y2="' + yy + '" stroke="' + CREAM + '" stroke-width="' + (1.1 - i * 0.2) + '" stroke-linecap="round" opacity="' + (0.85 - i * 0.15) + '"/>';
+    }
+    return s;
+  }
+
+  function grass(y) {
+    let s = '';
+    for (let x = 18; x <= 82; x += 4.5) {
+      const h = 4 + ((x * 7) % 5);
+      s += '<path d="M' + x + ' ' + (y + 6) + ' q 1 ' + (-h * 0.6) + ' ' + (x % 2 ? 2.5 : -2) + ' ' + (-h) + '" fill="none" stroke="' + CREAM + '" stroke-width="1.1" stroke-linecap="round"/>';
+    }
+    return s;
+  }
+
+  const scenes = {
+    clear: (f, night) => night
+      ? moons(46, 46, 16, f) + star(26, 26, 3.2) + star(74, 62, 2.6) + star(26, 64, 2) + star(76, 22, 2) + ground(76)
+      : sun(50, 45, 11.5, f) + ground(76),
+
+    cloudy: (f, night) => (night ? moons(54, 36, 11, f) + star(26, 24, 2.4) : sun(61, 35, 8.5, f)) +
+      cloud(44, 56, 1.05, f) + ground(76),
+
+    overcast: (f) => cloud(60, 36, 0.85, f, true) + cloud(42, 56, 1.1, f) + ground(76),
+
+    fog: (f) =>
+      '<path d="M14 66 L30 40 L38 50 L50 30 L64 52 L72 44 L86 62 L86 86 L14 86 Z" fill="' + CREAM + '"/>' +
+      '<path d="M50 30 L46 44 M64 52 L60 58 M30 40 L28 50" stroke="' + f + '" stroke-width="1.2" fill="none"/>' +
+      [52, 63, 74].map((y, i) =>
+        '<path d="M' + (12 + i * 4) + ' ' + y + ' q 8 -5 16 0 t 16 0 t 16 0 t 16 0 t 16 0" fill="none" stroke="' + f + '" stroke-width="6.5" stroke-linecap="round"/>' +
+        '<path d="M' + (12 + i * 4) + ' ' + y + ' q 8 -5 16 0 t 16 0 t 16 0 t 16 0 t 16 0" fill="none" stroke="' + CREAM + '" stroke-width="2.6" stroke-linecap="round"/>').join(''),
+
+    rain: (f) => cloud(50, 40, 1.15, f) + streaks([30, 39, 48, 57, 66, 75], 58, 76, 6) + grass(78),
+
+    snow: (f) => cloud(50, 38, 1.15, f) + flake(30, 62, 4.5) + flake(50, 70, 5) + flake(68, 60, 4) +
+      flake(40, 80, 3.5) + flake(62, 80, 3.5),
+
+    thunder: (f) => cloud(50, 38, 1.2, f) +
+      '<polygon points="54,52 40,70 49,70 42,86 64,63 54,63 60,52" fill="' + CREAM + '" stroke="' + f + '" stroke-width="1.5" stroke-linejoin="round"/>' +
+      streaks([30, 38, 70, 77], 56, 70, 4),
+
+    // The seal of Oblivion: two horns that flare out at the top and close to a point at the
+    // bottom, around a great ring with a small eye. Mirrored, so only the left half is written out.
+    oblivion: (f) => {
+      const both = d => '<path d="' + d + '"/><path d="' + d + '" transform="translate(100 0) scale(-1 1)"/>';
+      return '<g fill="' + CREAM + '">' +
+        // Left horn: a flared tip at the top, a heavy body hugging the ring, closing to the point.
+        both('M15 17 L 41 17 L 37 22 C 31 34 30.5 54 36 67 C 40 76 45 82 50 88 ' +
+             'C 38 84 25 72 21 55 C 18.5 42 19.5 29 15 17 Z') +
+        // The ring, a little taller than wide, as on the seal.
+        '<ellipse cx="50" cy="50" rx="15" ry="21.5"/>' +
+        '</g>' +
+        // A thin dark line keeps the ring and horns apart where they meet, as the seal is cut.
+        '<ellipse cx="50" cy="50" rx="15.6" ry="22.1" fill="none" stroke="' + f + '" stroke-width="1.2"/>' +
+        // The rough rim along the ring's upper left, where the original seal is chipped.
+        '<path d="M37 37 l 2.2 1.2 l -0.6 2.4 Z M40.5 32.5 l 2 1.8 l -1.2 2 Z M45 29.6 l 1.4 2.2 l -2 1.4 Z" fill="' + f + '"/>' +
+        // The small opening, slightly off round like the original's hand-cut hole.
+        '<ellipse cx="51" cy="54" rx="4.6" ry="7.4" fill="' + f + '" transform="rotate(-8 51 54)"/>' +
+        // Engraving: a cut down each horn.
+        both('M24.5 28 C 23 40 23.5 52 27 62').replace(/<path /g,
+          '<path fill="none" stroke="' + f + '" stroke-width="1.1" stroke-linecap="round" ');
+    },
+  };
+
+  function drawTile(icon, hour) {
+    const night = hour < 6 || hour >= 20;
+    const scene = scenes[icon] || scenes.cloudy;
+    const field = icon === 'oblivion' ? FIELD_OBLIVION : FIELD;
+    tile.innerHTML = plate(f => scene(f, night), field);
+  }
+
+  // ---------------------------------------------------------------------------------------------
+
+  const tile = document.getElementById('tile');
+  const time = document.getElementById('time');
+  const place = document.getElementById('location');
+  const date = document.getElementById('date');
+
+  // 12-hour clock, as the game shows it. A place with no name keeps its line, so nothing jumps.
+  function show(hour, minute, locationName, dateText, weatherIcon) {
+    const suffix = hour < 12 ? 'AM' : 'PM';
+    const h12 = hour % 12 === 0 ? 12 : hour % 12;
+    time.innerHTML = h12 + ':' + String(minute).padStart(2, '0') + '<small>' + suffix + '</small>';
+    place.textContent = locationName || ' ';
+    date.textContent = dateText;
+    drawTile(weatherIcon, hour);
+  }
+
+  if (!window.readym) {
+    // A sample for working on the page in a browser. Clicking the tile steps through every icon;
+    // ?icon=rain&night=1 opens on one.
+    const icons = Object.keys(scenes);
+    const query = new URLSearchParams(location.search);
+    let i = Math.max(0, icons.indexOf(query.get('icon'))), night = query.get('night') === '1';
+    const sample = () => show(night ? 22 : 13, 32, 'Imperial City, Market District', 'Tirdas, 28th of Last Seed, 3E 433',
+      icons[i]);
+    tile.addEventListener('click', () => {
+      if (++i === icons.length) { i = 0; night = !night; }
+      sample();
+    });
+    sample();
+    return;
+  }
+
+  readym.on('WorldState', show);
+  readym.sendReady();
+})();
+</script>

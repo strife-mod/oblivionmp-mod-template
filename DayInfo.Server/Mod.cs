@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Logging;
 using ReadyM.SDK.Attributes;
 
-namespace ExampleMod.Server;
+namespace DayInfo.Server;
 
 // The server half's entry point. As on the client, services and RPC handlers are found on their own.
 [ModEntry]

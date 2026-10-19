@@ -147,5 +147,5 @@ if ($DryRun)
 else
 {
     Write-Host "Done. Open $NewName.sln and build it to check the rename."
-    Write-Host "Class names like WalletKeys are feature names, not the mod name, so rename those yourself."
+    Write-Host "Class names like WorldHud are feature names, not the mod name, so rename those yourself."
 }
